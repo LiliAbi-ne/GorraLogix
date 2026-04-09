@@ -1,0 +1,6 @@
+node_modules/
+.env
+
+# Ignorar las imágenes subidas por los usuarios, excepto el archivo base
+public/img/*
+!public/img/.gitkeep
