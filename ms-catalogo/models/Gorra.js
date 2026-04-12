@@ -2,12 +2,12 @@
 const mongoose = require('mongoose');
 
 const gorraSchema = new mongoose.Schema({
-  marca: { type: String, required: true },
   modelo: { type: String, required: true },
-  stock: { type: Number, default: 0 },
-  imagenUrl: { type: String, required: true },
-  barcode: { type: String, required:true }
-
+  marca: { type: String, required: true },
+  categoria: { type: String, required: true, enum: ['Trucker', 'Urbano', 'Deportivo'] }, // <-- NUEVO
+  barcode: { type: String, required: true },
+  stock: { type: Number, required: true },
+  imagenUrl: { type: String, required: true }
 });
 
 module.exports = mongoose.model('Gorra', gorraSchema);

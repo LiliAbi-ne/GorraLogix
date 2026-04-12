@@ -71,6 +71,7 @@ function VistaTienda({ socket }) {
     const detallesDelPedido = gorrasPedidas.map(gorra => ({
       modelo: gorra.modelo,
       marca: gorra.marca,
+      categoria: gorra.categoria || 'Sin Categoría',
       barcode: gorra.barcode,
       cantidad: cantidades[gorra._id],
       imagenUrl: gorra.imagenUrl

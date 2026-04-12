@@ -67,9 +67,10 @@ app.post('/api/gorras', upload.single('imagen'), async (req, res) => {
     const nuevaGorra = new Gorra({
       modelo: req.body.modelo,
       marca: req.body.marca,
+      categoria: req.body.categoria,
       barcode: req.body.barcode,
       stock: req.body.stock,
-      imagenUrl: req.file.filename // Ahora se llamará como tu barcode (ej. 12345.jpg)
+      imagenUrl: req.file.filename 
     });
     
     await nuevaGorra.save();
@@ -89,6 +90,7 @@ app.put('/api/gorras/:id', upload.single('imagen'), async (req, res) => {
     const datosActualizados = {
       modelo: req.body.modelo,
       marca: req.body.marca,
+      categoria: req.body.categoria,
       barcode: req.body.barcode,
       stock: req.body.stock
     };
