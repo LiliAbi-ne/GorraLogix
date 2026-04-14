@@ -7,103 +7,58 @@ const mongoose = require('mongoose');
 const app = express();
 app.use(cors());
 const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: "http://localhost:5173" } });
 
-const io = new Server(server, {
-  cors: { origin: "http://localhost:5173" } // Asegura que tu frontend pueda hablarle
-});
+// CONEXIONES A AMBAS BASES DE DATOS
+const dbPedidos = mongoose.createConnection('mongodb://localhost:27017/almacen_pedidos');
+const dbCatalogo = mongoose.createConnection('mongodb://localhost:27017/almacen_catalogo');
 
-// ==========================================
-// 1. BASE DE DATOS (Para ms-analitica)
-// ==========================================
-mongoose.connect('mongodb://localhost:27017/almacen_pedidos')
-  .then(() => console.log('✅ Conectado a MongoDB - Historial de Pedidos'))
-  .catch(err => console.error('❌ Error MongoDB:', err));
+const Pedido = dbPedidos.model('Pedido', new mongoose.Schema({}, { strict: false }));
+const Gorra = dbCatalogo.model('Gorra', new mongoose.Schema({ barcode: String, stock: Number }, { strict: false }));
 
-const Pedido = mongoose.model('Pedido', new mongoose.Schema({
-  idPedido: String,
-  tienda: String,
-  fecha: String,
-  totalArticulos: Number,
-  items: Array
-}));
+let reservasGlobales = {}; // Memoria temporal para la tienda
 
-// ==========================================
-// 2. MEMORIA VOLÁTIL (Para Reservas Dinámicas)
-// ==========================================
-// Estructura: { idDelSocket: { idDeLaGorra: cantidad } }
-let reservasPorCliente = {};
-let reservasGlobales = {};
-
-// Función que suma todas las reservas de todas las tiendas conectadas
-const recalcularReservasGlobales = () => {
-  reservasGlobales = {};
-  for (const socketId in reservasPorCliente) {
-    const reservasDelSocket = reservasPorCliente[socketId];
-    for (const idGorra in reservasDelSocket) {
-      if (!reservasGlobales[idGorra]) reservasGlobales[idGorra] = 0;
-      reservasGlobales[idGorra] += reservasDelSocket[idGorra];
-    }
-  }
-  // Dispara el aviso a todas las tiendas para que actualicen sus números rojos/azules
-  io.emit('reservas_actualizadas', reservasGlobales);
-};
-
-// ==========================================
-// 3. EVENTOS WEBSOCKET
-// ==========================================
 io.on('connection', (socket) => {
-  console.log('🔌 Cliente conectado a Pedidos:', socket.id);
-  
-  // Apenas entra una tienda, le mandamos cómo está el inventario reservado
-  socket.emit('reservas_actualizadas', reservasGlobales);
+  console.log('🔌 Cliente conectado:', socket.id);
 
-  // EVENTO A: La tienda le da al botón de "+" o "-"
-  socket.on('modificar_reserva', ({ idGorra, nuevaCantidad }) => {
-    if (!reservasPorCliente[socket.id]) reservasPorCliente[socket.id] = {};
-    
-    if (nuevaCantidad === 0) {
-      delete reservasPorCliente[socket.id][idGorra];
-    } else {
-      reservasPorCliente[socket.id][idGorra] = nuevaCantidad;
-    }
-    recalcularReservasGlobales();
-  });
-
-  // EVENTO B: La tienda vacía el carrito
-  socket.on('limpiar_carrito', () => {
-    delete reservasPorCliente[socket.id];
-    recalcularReservasGlobales();
-  });
-
-  // EVENTO C: LA TIENDA ENVÍA EL PEDIDO AL ALMACÉN
+  // 1. RECIBIR PEDIDO (Solo guarda y notifica)
   socket.on('nuevo_pedido', async (ticket) => {
     try {
-      // 1. Lo guardamos en MongoDB (Para tus gráficas de analítica)
-      await Pedido.create(ticket);
-      
-      // 2. Se lo aventamos al Almacén para que suene la alerta
-      io.emit('pedido_recibido', ticket);
-      
-      // 3. Como ya lo compraron, liberamos esas reservas de la memoria temporal
-      delete reservasPorCliente[socket.id];
-      recalcularReservasGlobales();
-      
-      console.log("📦 Pedido procesado exitosamente:", ticket.idPedido);
-    } catch (error) {
-      console.error("❌ Error al procesar pedido:", error);
-    }
+      await Pedido.create(ticket); // Se guarda en el historial para analítica
+      io.emit('pedido_recibido', ticket); // Alerta al almacén en tiempo real
+      console.log("📥 Pedido recibido y guardado:", ticket.idPedido);
+    } catch (err) { console.error(err); }
   });
 
-  // EVENTO D: Prevención de desastres (Si la tienda cierra la pestaña de golpe)
-  socket.on('disconnect', () => {
-    console.log('❌ Cliente desconectado:', socket.id);
-    // Le quitamos todas las gorras que tenía acaparadas en su carrito
-    delete reservasPorCliente[socket.id];
-    recalcularReservasGlobales();
+  // 2. FINALIZAR PEDIDO (Resta stock y elimina de la lista activa)
+  socket.on('finalizar_pedido', async (idPedido) => {
+    try {
+      // Buscamos la orden para saber qué gorras restar
+      const pedido = await Pedido.findOne({ idPedido: idPedido });
+      if (!pedido) return;
+
+      // Restamos el stock en el catálogo
+      for (let item of pedido.items) {
+        await Gorra.updateOne(
+          { barcode: item.barcode },
+          { $inc: { stock: -item.cantidad } }
+        );
+      }
+
+      // Borramos el pedido de la base de datos de pedidos "activos"
+      await Pedido.deleteOne({ idPedido: idPedido });
+
+      // Avisamos a todos para que actualicen sus tablas
+      io.emit('pedido_finalizado', idPedido); 
+      io.emit('catalogo_actualizado'); 
+      console.log(`✅ Orden ${idPedido} despachada y stock actualizado.`);
+    } catch (err) { console.error("Error al finalizar:", err); }
   });
 });
 
-// Arrancar servidor
-server.listen(3001, () => {
-  console.log(`🚀 Servidor ms-pedidos corriendo en http://localhost:3001`);
+app.get('/api/pedidos', async (req, res) => {
+  const historial = await Pedido.find().sort({ _id: -1 });
+  res.json(historial);
 });
+
+server.listen(3001, () => console.log(`🚀 ms-pedidos en puerto 3001`));

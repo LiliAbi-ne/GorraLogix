@@ -4,7 +4,7 @@ import DashboardAnalitica from './DashboardAnalitica';
 
 function VistaAlmacen({ socket }) {
   // --- ESTADOS DE NAVEGACIÓN ---
-  const [pestanaActiva, setPestanaActiva] = useState('operacion'); // 'operacion' o 'analitica'
+  const [pestanaActiva, setPestanaActiva] = useState('operacion');
 
   // --- ESTADOS DE DATOS ---
   const [pedidos, setPedidos] = useState([]);
@@ -43,13 +43,39 @@ function VistaAlmacen({ socket }) {
       .catch(err => console.error(err));
   };
 
+  const cargarHistorialPedidos = () => {
+    fetch('http://localhost:3001/api/pedidos')
+      .then(res => res.json())
+      .then(datos => setPedidos(datos))
+      .catch(err => console.error("Error al cargar pedidos:", err));
+  };
+
   useEffect(() => {
     cargarInventario();
+    cargarHistorialPedidos(); 
+
     const manejarNuevoPedido = (nuevoPedido) => {
       setPedidos((pedidosAnteriores) => [nuevoPedido, ...pedidosAnteriores]);
     };
+    
     socket.on('pedido_recibido', manejarNuevoPedido);
-    return () => socket.off('pedido_recibido', manejarNuevoPedido);
+
+    // --- NUEVO: ESCUCHAR CUANDO SE DESPACHA UNA ORDEN ---
+    socket.on('pedido_finalizado', (idEliminado) => {
+      // Filtramos la lista para borrar la tarjeta roja de la pantalla
+      setPedidos((prev) => prev.filter(p => p.idPedido !== idEliminado));
+    });
+
+    socket.on('catalogo_actualizado', () => {
+      // Recargamos la tabla de inventario porque los números bajaron
+      cargarInventario();
+    });
+
+    return () => {
+      socket.off('pedido_recibido', manejarNuevoPedido);
+      socket.off('pedido_finalizado');
+      socket.off('catalogo_actualizado');
+    };
   }, [socket]);
 
   // --- LÓGICA DINÁMICA DE MARCAS ---
@@ -68,10 +94,10 @@ function VistaAlmacen({ socket }) {
   const manejarSubidaGorra = async (e) => {
     e.preventDefault();
     const formData = new FormData();
-    formData.append('modelo', modelo); 
+    formData.append('modelo', modelo);
     formData.append('marca', marca);
     formData.append('categoria', categoria);
-    formData.append('barcode', barcode); 
+    formData.append('barcode', barcode);
     formData.append('stock', stock);
     formData.append('imagen', imagen);
     try {
@@ -95,22 +121,30 @@ function VistaAlmacen({ socket }) {
   };
 
   const abrirModalEdicion = (gorra) => {
-    setGorraEditando(gorra); 
-    setEditModelo(gorra.modelo); 
+    setGorraEditando(gorra);
+    setEditModelo(gorra.modelo);
     setEditMarca(gorra.marca);
     setEditCategoria(gorra.categoria || 'Urbano');
-    setEditBarcode(gorra.barcode); 
-    setEditStock(gorra.stock); 
+    setEditBarcode(gorra.barcode);
+    setEditStock(gorra.stock);
     setEditImagen(null);
+  };
+  
+  // --- NUEVA FUNCIÓN: FINALIZAR EL PEDIDO ---
+  const finalizarDespacho = (idPedido) => {
+    if (window.confirm("¿Confirmas que el pedido ya fue empaquetado y salió del almacén?")) {
+      socket.emit('finalizar_pedido', idPedido);
+      setPedidoViendo(null); // Cerramos el modal de detalles
+    }
   };
 
   const guardarCambiosEdicion = async (e) => {
     e.preventDefault();
     const formData = new FormData();
-    formData.append('modelo', editModelo); 
+    formData.append('modelo', editModelo);
     formData.append('marca', editMarca);
     formData.append('categoria', editCategoria);
-    formData.append('barcode', editBarcode); 
+    formData.append('barcode', editBarcode);
     formData.append('stock', editStock);
     if (editImagen) formData.append('imagen', editImagen);
     try {
@@ -130,36 +164,37 @@ function VistaAlmacen({ socket }) {
       'Marca': item.marca,
       'Categoría': item.categoria || 'Sin Categoría',
       'Cantidades Pedidas': item.cantidad,
-      '¿Separada?': false 
+      '¿Separada?': false
     }));
 
     const hojaDeCalculo = XLSX.utils.json_to_sheet(datosExcel);
-    hojaDeCalculo['!cols'] = [ { wch: 45 }, { wch: 15 }, { wch: 30 }, { wch: 15 }, { wch: 15 }, { wch: 20 }, { wch: 15 } ];
+    hojaDeCalculo['!cols'] = [{ wch: 45 }, { wch: 15 }, { wch: 30 }, { wch: 15 }, { wch: 15 }, { wch: 20 }, { wch: 15 }];
 
     const libroDeExcel = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(libroDeExcel, hojaDeCalculo, `Orden_${pedido.tienda}`);
-    XLSX.writeFile(libroDeExcel, `PickList_${pedido.tienda.replace(/\s+/g, '')}_${pedido.idPedido.toString().slice(-6)}.xlsx`);
+
+    // Escudo protector para el ID en el nombre del archivo Excel
+    const idSeguro = pedido.idPedido ? pedido.idPedido.toString().slice(-6) : '000000';
+    XLSX.writeFile(libroDeExcel, `PickList_${pedido.tienda.replace(/\s+/g, '')}_${idSeguro}.xlsx`);
   };
 
   // --- INTERFAZ ---
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-10">
-      
+
       {/* NAVEGACIÓN POR PESTAÑAS */}
       <div className="flex bg-white p-1.5 rounded-2xl shadow-md w-fit mx-auto border border-gray-100 mb-8">
-        <button 
+        <button
           onClick={() => setPestanaActiva('operacion')}
-          className={`px-8 py-3 rounded-xl font-bold transition-all flex items-center gap-2 ${
-            pestanaActiva === 'operacion' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500 hover:bg-gray-50'
-          }`}
+          className={`px-8 py-3 rounded-xl font-bold transition-all flex items-center gap-2 ${pestanaActiva === 'operacion' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500 hover:bg-gray-50'
+            }`}
         >
           <span>📋</span> Gestión Operativa
         </button>
-        <button 
+        <button
           onClick={() => setPestanaActiva('analitica')}
-          className={`px-8 py-3 rounded-xl font-bold transition-all flex items-center gap-2 ${
-            pestanaActiva === 'analitica' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500 hover:bg-gray-50'
-          }`}
+          className={`px-8 py-3 rounded-xl font-bold transition-all flex items-center gap-2 ${pestanaActiva === 'analitica' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500 hover:bg-gray-50'
+            }`}
         >
           <span>📊</span> Panel de Analítica
         </button>
@@ -168,23 +203,23 @@ function VistaAlmacen({ socket }) {
       {/* CONTENIDO CONDICIONAL DE PESTAÑAS */}
       {pestanaActiva === 'operacion' ? (
         <div className="space-y-10 animate-fade-in">
-          
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             {/* Formulario Crear */}
             <div className="bg-white rounded-2xl shadow-lg p-6 h-fit">
               <h2 className="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">Añadir Nuevo Modelo</h2>
               <form onSubmit={manejarSubidaGorra} className="space-y-4">
                 <div><label className="block text-sm font-medium mb-1">Modelo</label><input type="text" required value={modelo} onChange={e => setModelo(e.target.value)} className="w-full px-4 py-2 border rounded-lg outline-none" /></div>
-                
+
                 <div className="grid grid-cols-2 gap-4">
                   {/* Selector Dinámico de Marca */}
                   <div>
                     <label className="block text-sm font-medium mb-1">Marca</label>
                     {!esNuevaMarca ? (
                       <select required value={marca} onChange={(e) => {
-                          if (e.target.value === 'NUEVA_MARCA') { setEsNuevaMarca(true); setMarca(''); } 
-                          else { setMarca(e.target.value); }
-                        }} className="w-full px-4 py-2 border rounded-lg outline-none bg-white cursor-pointer"
+                        if (e.target.value === 'NUEVA_MARCA') { setEsNuevaMarca(true); setMarca(''); }
+                        else { setMarca(e.target.value); }
+                      }} className="w-full px-4 py-2 border rounded-lg outline-none bg-white cursor-pointer"
                       >
                         <option value="" disabled>Seleccione marca</option>
                         {marcasDisponibles.map(m => <option key={m} value={m}>{m}</option>)}
@@ -197,7 +232,7 @@ function VistaAlmacen({ socket }) {
                       </div>
                     )}
                   </div>
-                  
+
                   {/* Selector de Categoría */}
                   <div>
                     <label className="block text-sm font-medium mb-1">Categoría</label>
@@ -228,14 +263,16 @@ function VistaAlmacen({ socket }) {
                 ) : (
                   <ul className="space-y-3">
                     {pedidos.map((pedido) => (
-                      <li key={pedido.idPedido} onClick={() => setPedidoViendo(pedido)} className="p-4 border-l-4 border-red-500 bg-red-50 rounded-r-lg cursor-pointer hover:bg-red-100 transition-colors flex justify-between items-center shadow-sm">
+                      // ESCUDO 1: Usamos _id de MongoDB como key por si no hay idPedido
+                      <li key={pedido._id || Math.random()} onClick={() => setPedidoViendo(pedido)} className="p-4 border-l-4 border-red-500 bg-red-50 rounded-r-lg cursor-pointer hover:bg-red-100 transition-colors flex justify-between items-center shadow-sm">
                         <div>
                           <p className="font-bold text-gray-900">Orden de: {pedido.tienda}</p>
-                          <p className="text-sm text-gray-600">ID: #{pedido.idPedido.toString().slice(-6)}</p>
+                          {/* ESCUDO 2: Verificamos que idPedido exista antes de hacer toString() */}
+                          <p className="text-sm text-gray-600">ID: #{pedido.idPedido ? pedido.idPedido.toString().slice(-6) : 'N/A'}</p>
                         </div>
                         <div className="text-right">
-                          <span className="px-3 py-1 rounded-full text-sm font-bold bg-red-600 text-white">{pedido.totalArticulos} arts.</span>
-                          <p className="text-xs text-gray-500 mt-1">{pedido.fecha}</p>
+                          <span className="px-3 py-1 rounded-full text-sm font-bold bg-red-600 text-white">{pedido.totalArticulos || 0} arts.</span>
+                          <p className="text-xs text-gray-500 mt-1">{pedido.fecha || 'Sin fecha'}</p>
                         </div>
                       </li>
                     ))}
@@ -293,7 +330,7 @@ function VistaAlmacen({ socket }) {
       )}
 
       {/* --- MODALES FLOTANTES --- */}
-      
+
       {/* Modal Ver Pedido y Exportar Excel */}
       {pedidoViendo && (
         <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
@@ -301,7 +338,8 @@ function VistaAlmacen({ socket }) {
             <div className="flex justify-between items-center mb-6 border-b pb-4">
               <div>
                 <h2 className="text-2xl font-bold text-gray-800">Orden de {pedidoViendo.tienda}</h2>
-                <p className="text-gray-500 text-sm">Fecha: {pedidoViendo.fecha} | ID: #{pedidoViendo.idPedido.toString().slice(-6)}</p>
+                {/* ESCUDO 3: Verificación en el Modal */}
+                <p className="text-gray-500 text-sm">Fecha: {pedidoViendo.fecha || 'Sin fecha'} | ID: #{pedidoViendo.idPedido ? pedidoViendo.idPedido.toString().slice(-6) : 'N/A'}</p>
               </div>
               <button onClick={() => setPedidoViendo(null)} className="text-gray-400 hover:text-red-500 text-2xl font-bold">&times;</button>
             </div>
@@ -316,10 +354,10 @@ function VistaAlmacen({ socket }) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {pedidoViendo.items.map((item, idx) => (
+                  {(pedidoViendo.items || []).map((item, idx) => (
                     <tr key={idx} className="hover:bg-gray-50">
                       <td className="p-3 font-semibold text-gray-800">
-                        {item.modelo} 
+                        {item.modelo}
                         <span className="text-xs font-normal text-gray-500 block">{item.marca} - {item.categoria || 'Sin Categoría'}</span>
                       </td>
                       <td className="p-3 font-mono text-sm">{item.barcode}</td>
@@ -334,11 +372,20 @@ function VistaAlmacen({ socket }) {
               <span className="text-gray-600 font-medium">Total de gorras a empacar:</span>
               <span className="text-2xl font-black text-gray-900">{pedidoViendo.totalArticulos}</span>
             </div>
-            
+
             <div className="flex gap-4 mt-6">
-              <button onClick={() => setPedidoViendo(null)} className="flex-1 bg-gray-200 text-gray-800 font-bold py-3 rounded-lg hover:bg-gray-300">Cerrar Orden</button>
-              <button onClick={() => exportarExcel(pedidoViendo)} className="flex-1 bg-green-600 text-white font-bold py-3 rounded-lg hover:bg-green-700 shadow-lg flex justify-center items-center gap-2">
-                <span>📊</span> Exportar a Excel
+              <button onClick={() => setPedidoViendo(null)} className="flex-1 bg-gray-200 text-gray-800 font-bold py-3 rounded-lg hover:bg-gray-300">Cerrar</button>
+
+              {/* NUEVO BOTÓN PARA FINALIZAR */}
+              <button
+                onClick={() => finalizarDespacho(pedidoViendo.idPedido)}
+                className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 shadow-lg"
+              >
+                Finalizar y Restar Stock 🚚
+              </button>
+
+              <button onClick={() => exportarExcel(pedidoViendo)} className="bg-green-600 text-white font-bold px-4 py-3 rounded-lg hover:bg-green-700">
+                📊 Excel
               </button>
             </div>
           </div>

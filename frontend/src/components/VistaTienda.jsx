@@ -6,16 +6,23 @@ function VistaTienda({ socket }) {
   const [reservasGlobales, setReservasGlobales] = useState({});
   const [notificacion, setNotificacion] = useState(null);
 
-  // --- NUEVO: ESTADOS PARA PAGINACIÓN ---
+  // --- ESTADOS PARA PAGINACIÓN ---
   const [paginaActual, setPaginaActual] = useState(1);
   const gorrasPorPagina = 6; // 6 es ideal para que la cuadrícula se vea simétrica
 
   useEffect(() => {
-    fetch('http://localhost:3002/api/gorras')
-      .then(respuesta => respuesta.json())
-      .then(datos => setGorras(datos))
-      .catch(error => console.error('Error al cargar catálogo:', error));
+    // 1. Convertimos la petición en una función reutilizable
+    const cargarCatalogo = () => {
+      fetch('http://localhost:3002/api/gorras')
+        .then(respuesta => respuesta.json())
+        .then(datos => setGorras(datos))
+        .catch(error => console.error('Error al cargar catálogo:', error));
+    };
 
+    // 2. Cargamos las gorras apenas entramos a la tienda
+    cargarCatalogo();
+
+    // 3. Escuchamos las reservas de los demás
     socket.on('reservas_actualizadas', (mapaReservas) => {
       setReservasGlobales(mapaReservas);
     });
@@ -25,9 +32,16 @@ function VistaTienda({ socket }) {
       alert("Tu sesión de reserva expiró por inactividad (60 minutos). Las gorras han sido liberadas.");
     });
 
+    // 4. NUEVO: Escuchamos cuando el almacén resta las gorras de forma oficial
+    socket.on('catalogo_actualizado', () => {
+      cargarCatalogo(); // Volvemos a pedir las gorras frescas a la BD
+    });
+
+    // 5. Limpieza de seguridad
     return () => {
       socket.off('reservas_actualizadas');
       socket.off('reserva_expirada');
+      socket.off('catalogo_actualizado');
     };
   }, [socket]);
 
@@ -85,14 +99,16 @@ function VistaTienda({ socket }) {
       items: detallesDelPedido
     };
 
+    // Enviamos el pedido oficial
     socket.emit('nuevo_pedido', ticketPedido);
 
     setNotificacion(`¡Éxito! Se ha enviado la orden a almacén con ${totalGorrasPedidas} artículos.`);
     setTimeout(() => setNotificacion(null), 3000);
     
+    // Limpiamos carrito local
     setCantidades({});
     socket.emit('limpiar_carrito'); 
-    setPaginaActual(1); // Opcional: regresamos a la página 1 al confirmar
+    setPaginaActual(1); // Regresamos a la página 1 al confirmar
   };
 
   // --- LÓGICA MATEMÁTICA DE LA PAGINACIÓN ---
@@ -102,7 +118,7 @@ function VistaTienda({ socket }) {
   const totalPaginas = Math.ceil(gorras.length / gorrasPorPagina);
 
   return (
-    <div className="relative pb-32"> {/* pb-32 da espacio para la barra inferior y los botones de página */}
+    <div className="relative pb-32"> 
       
       {notificacion && (
         <div className="fixed top-20 left-1/2 transform -translate-x-1/2 bg-green-600 text-white px-6 py-3 rounded-full shadow-2xl z-50 animate-bounce font-bold">
@@ -115,7 +131,7 @@ function VistaTienda({ socket }) {
         <p className="text-gray-500 mt-2 text-lg">Reserva dinámica activada (Las reservas expiran en 60 min)</p>
       </header>
 
-      {/* Cuadrícula de Gorras (Ahora solo dibuja las de la página actual) */}
+      {/* Cuadrícula de Gorras */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8 max-w-6xl mx-auto">
         {gorrasPaginadas.map((gorra) => {
           const reservasTotales = reservasGlobales[gorra._id] || 0;
