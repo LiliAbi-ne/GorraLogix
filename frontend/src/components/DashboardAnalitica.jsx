@@ -8,37 +8,53 @@ function DashboardAnalitica() {
 
   // Cargar datos desde nuestro nuevo microservicio (Puerto 3004)
   const cargarDatos = () => {
+    console.log("🔄 Solicitando datos a ms-analitica...");
+
     fetch('http://localhost:3004/api/analitica/kpis')
       .then(res => res.json())
-      .then(data => data.exito && setKpis(data.datos));
+      .then(data => {
+        if (data.exito) setKpis(data.datos);
+      }).catch(err => console.error("Error en KPIs:", err));
 
     fetch('http://localhost:3004/api/analitica/ventas-categoria')
       .then(res => res.json())
       .then(data => {
+        console.log("📊 Datos de Ventas recibidos:", data); // <-- ESPÍA
         if (data.exito) {
-          // Recharts necesita que los datos tengan un formato específico
           const datosFormateados = data.datos.map(item => ({
             name: item._id || 'Sin Categoría',
             Vendidas: item.totalVendido
           }));
           setVentasCategoria(datosFormateados);
         }
-      });
+      }).catch(err => console.error("Error en Ventas:", err));
 
     fetch('http://localhost:3004/api/analitica/stock-critico')
       .then(res => res.json())
-      .then(data => data.exito && setStockCritico(data.datos));
+      .then(data => {
+        if (data.exito) setStockCritico(data.datos);
+      }).catch(err => console.error("Error en Stock:", err));
   };
 
   useEffect(() => {
     cargarDatos();
-    // Actualizar los gráficos cada 10 segundos
     const intervalo = setInterval(cargarDatos, 10000); 
     return () => clearInterval(intervalo);
   }, []);
 
   return (
     <div className="space-y-8 animate-fade-in-up">
+      
+      {/* BOTÓN DE RECARGA MANUAL (Para pruebas) */}
+      <div className="flex justify-end">
+        <button 
+          onClick={cargarDatos}
+          className="bg-gray-800 text-white px-4 py-2 rounded-lg font-bold hover:bg-gray-700 shadow-md flex items-center gap-2"
+        >
+          <span>🔄</span> Forzar Actualización
+        </button>
+      </div>
+
       {/* TARJETAS DE KPIs */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="bg-white rounded-2xl shadow-lg p-6 flex items-center justify-between border-l-4 border-blue-600">
@@ -93,7 +109,7 @@ function DashboardAnalitica() {
                   <li key={gorra._id} className="p-3 bg-red-50 border border-red-100 rounded-xl flex justify-between items-center">
                     <div>
                       <p className="font-bold text-gray-900 text-sm">{gorra.modelo}</p>
-                      <p className="text-xs text-gray-500">{gorra.marca} - {gorra.categoria}</p>
+                      <p className="text-xs text-gray-500">{gorra.marca} - {gorra.categoria || 'Sin Categoría'}</p>
                     </div>
                     <span className="bg-red-600 text-white font-bold py-1 px-3 rounded-full text-sm">
                       {gorra.stock} left
